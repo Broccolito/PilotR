@@ -1,4 +1,4 @@
-# PilotR <img src="assets/icon.png" align="right" alt="PilotR Logo" width="200"/>
+# PilotR <img src="assets/icon.png" align="right" alt="PilotR Logo" width="100"/>
 
 MCP-compliant R code execution and management agent for Claude Desktop Extension.
 
