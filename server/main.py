@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-TidyFlow: MCP-compliant R code execution and management agent
+PilotR: MCP-compliant R code execution and management agent
 Purpose: Generate, execute, and manage R scripts within a user-specified directory
-Requirements: Python 3.8+, MCP SDK, R runtime (Rscript in PATH)
+Requirements: Python 3.12+, MCP SDK, R runtime (Rscript in PATH)
 """
 
 import json
@@ -31,14 +31,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# R script scaffold template - now minimal, getting straight to business
-R_SCAFFOLD = """# ---- Packages ----
-library(ggplot2)
+# ASCII Art for PilotR
+def print_ascii_banner():
+    """Print ASCII art banner with current date/time"""
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    banner = f"""
+╔════════════════════════════════════════════════╗
 
-# ---- Functions ----
+    PilotR
+    MCP Server for R Script Management
+    Author: Wanjun Gu (wanjun.gu@ucsf.edu)
+    Started: {current_time}
 
-# ---- Main ----
+╚════════════════════════════════════════════════╝
+"""
+    logger.info(banner)
 
+# Minimal R script scaffold template
+R_SCAFFOLD = """
 """
 
 # ggplot Style Guide for reference
@@ -99,12 +109,12 @@ ggsave("plot.png", p, width=5, height=4, dpi=800)
 - Humanize variable names in labels
 """
 
-class TidyFlowServer:
+class PilotRServer:
     def __init__(self):
         self.state_dir = None
         self.state_file = None
         self.workdir = None
-        self.primary_file = "agent.R"  # Changed from .r to .R
+        self.primary_file = "agent.R"  # Using uppercase .R extension
         
     def load_state(self) -> Dict[str, Any]:
         """Load state from JSON file"""
@@ -145,16 +155,8 @@ class TidyFlowServer:
             return False
         try:
             resolved = path.resolve()
-            # For Python 3.8 compatibility
-            try:
-                return resolved.is_relative_to(self.workdir)
-            except AttributeError:
-                # Fallback for Python < 3.9
-                try:
-                    resolved.relative_to(self.workdir)
-                    return True
-                except ValueError:
-                    return False
+            # For Python 3.12 compatibility (is_relative_to is available)
+            return resolved.is_relative_to(self.workdir)
         except (ValueError, RuntimeError):
             return False
     
@@ -181,152 +183,162 @@ class TidyFlowServer:
                 }
             }
         
-        start_time = time.time()
         try:
+            # Change to workdir for execution
+            original_cwd = os.getcwd()
+            if self.workdir:
+                os.chdir(self.workdir)
+            
+            # Execute the R command
             result = subprocess.run(
                 [r_exe] + args,
                 capture_output=True,
                 text=True,
-                cwd=self.workdir,
                 timeout=timeout,
-                env={**os.environ, "R_LIBS_USER": str(self.workdir / "R_libs")}
+                check=False
             )
-            elapsed = time.time() - start_time
+            
+            # Restore original working directory
+            os.chdir(original_cwd)
+            
+            # Process output
+            stdout_lines = result.stdout.strip().split('\n') if result.stdout else []
+            stderr_lines = result.stderr.strip().split('\n') if result.stderr else []
+            
+            # Clean up R output (remove empty lines and warnings about no visible binding)
+            stdout_lines = [line for line in stdout_lines if line and not line.startswith("Loading required package:")]
+            stderr_lines = [line for line in stderr_lines if line and "no visible binding" not in line]
+            
+            if result.returncode != 0:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "R_EXECUTION_ERROR",
+                        "message": f"R execution failed with code {result.returncode}",
+                        "details": {
+                            "stdout": stdout_lines,
+                            "stderr": stderr_lines,
+                            "returncode": result.returncode
+                        }
+                    }
+                }
             
             return {
-                "ok": result.returncode == 0,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "returncode": result.returncode,
-                "elapsed_seconds": elapsed
+                "ok": True,
+                "data": {
+                    "stdout": stdout_lines,
+                    "stderr": stderr_lines,
+                    "returncode": result.returncode
+                }
             }
+            
         except subprocess.TimeoutExpired:
             return {
                 "ok": False,
                 "error": {
                     "code": "TIMEOUT",
-                    "message": f"R command timed out after {timeout} seconds",
-                    "hints": ["Increase timeout_sec parameter", "Check for infinite loops in your code"]
+                    "message": f"R execution timed out after {timeout} seconds",
+                    "hints": ["Consider increasing timeout_sec parameter", "Check for infinite loops or long-running operations"]
                 }
             }
         except Exception as e:
             return {
                 "ok": False,
                 "error": {
-                    "code": "EXEC_ERROR",
-                    "message": f"Failed to execute R command: {str(e)}"
+                    "code": "EXECUTION_ERROR",
+                    "message": f"Failed to execute R: {str(e)}"
                 }
             }
-    
-    def optimize_ggplot_code(self, code: str) -> Tuple[str, List[str]]:
-        """Apply style guide optimizations to ggplot code"""
-        optimized = code
-        changes = []
-        
-        # Replace <- with = for assignments
-        if '<-' in optimized:
-            optimized = optimized.replace('<-', '=')
-            changes.append("Replaced <- with = for assignments")
-        
-        # Replace theme_gray with theme_minimal
-        if 'theme_gray()' in optimized or 'theme_grey()' in optimized:
-            optimized = optimized.replace('theme_gray()', 'theme_minimal(base_size=14)')
-            optimized = optimized.replace('theme_grey()', 'theme_minimal(base_size=14)')
-            changes.append("Replaced default theme with theme_minimal(base_size=14)")
-        
-        # Check for ggsave and ensure proper dpi
-        if 'ggsave(' in optimized and 'dpi=' not in optimized:
-            optimized = optimized.replace('ggsave(', 'ggsave(dpi=800, ')
-            changes.append("Added dpi=800 to ggsave for high quality output")
-        
-        # Check for default dimensions
-        if 'ggsave(' in optimized and 'width=' not in optimized:
-            optimized = optimized.replace('ggsave(', 'ggsave(width=5, height=4, ')
-            changes.append("Added optimal dimensions (5x4 inches) to ggsave")
-        
-        return optimized, changes
     
     async def handle_set_workdir(self, path: str, create: bool = True) -> Dict[str, Any]:
         """Set working directory"""
         try:
-            workdir = Path(path).resolve()
+            workdir = Path(path).expanduser().resolve()
             
-            if create:
-                workdir.mkdir(parents=True, exist_ok=True)
-            elif not workdir.exists():
+            if not workdir.exists():
+                if create:
+                    workdir.mkdir(parents=True, exist_ok=True)
+                    logger.info(f"Created directory: {workdir}")
+                else:
+                    return {
+                        "ok": False,
+                        "error": {
+                            "code": "DIR_NOT_FOUND",
+                            "message": f"Directory {path} does not exist",
+                            "hints": ["Set create=true to create the directory", "Check the path is correct"]
+                        }
+                    }
+            elif not workdir.is_dir():
                 return {
                     "ok": False,
                     "error": {
-                        "code": "DIR_NOT_FOUND",
-                        "message": f"Directory {path} does not exist",
-                        "hints": ["Set create=true to create the directory", "Provide an existing directory path"]
+                        "code": "NOT_A_DIR",
+                        "message": f"Path {path} exists but is not a directory"
                     }
                 }
             
-            if not workdir.is_dir():
-                return {
-                    "ok": False,
-                    "error": {
-                        "code": "NOT_A_DIRECTORY",
-                        "message": f"{path} is not a directory"
-                    }
-                }
-            
+            # Set workdir and state paths
             self.workdir = workdir
-            self.state_dir = workdir / ".TidyFlow"
+            self.state_dir = workdir / ".pilotr"
             self.state_dir.mkdir(exist_ok=True)
             self.state_file = self.state_dir / "state.json"
             
             # Save state
             state = self.load_state()
-            state["workdir"] = str(workdir)
-            state["primary_file"] = self.primary_file
-            state["updated_at"] = datetime.now().isoformat()
+            state.update({
+                "workdir": str(self.workdir),
+                "primary_file": self.primary_file,
+                "updated_at": datetime.now().isoformat()
+            })
             self.save_state(state)
             
+            logger.info(f"Working directory set to: {self.workdir}")
             return {
                 "ok": True,
                 "data": {
-                    "workdir": str(workdir),
-                    "primary_file": self.primary_file,
-                    "state_dir": str(self.state_dir)
+                    "workdir": str(self.workdir),
+                    "state_dir": str(self.state_dir),
+                    "primary_file": self.primary_file
                 }
             }
         except Exception as e:
             return {
                 "ok": False,
                 "error": {
-                    "code": "SET_WORKDIR_ERROR",
+                    "code": "SET_DIR_ERROR",
                     "message": f"Failed to set working directory: {str(e)}"
                 }
             }
     
     async def handle_get_state(self) -> Dict[str, Any]:
         """Get current state"""
-        state = {
+        state = self.load_state() if self.state_file else {}
+        
+        # Add current runtime state
+        state.update({
             "workdir": str(self.workdir) if self.workdir else None,
             "primary_file": self.primary_file,
-            "r_executable": self.find_r_executable()
+            "r_available": self.find_r_executable() is not None
+        })
+        
+        return {
+            "ok": True,
+            "data": state
         }
-        
-        if self.state_file and self.state_file.exists():
-            saved_state = self.load_state()
-            state.update(saved_state)
-        
-        return {"ok": True, "data": state}
     
-    async def handle_create_r_file(self, filename: str, overwrite: bool = False, scaffold: bool = True) -> Dict[str, Any]:
-        """Create new R file"""
+    async def handle_create_R_file(self, filename: str, overwrite: bool = False, scaffold: bool = True) -> Dict[str, Any]:
+        """Create a new R script file"""
         ok, error = self.ensure_workdir_set()
         if not ok:
             return {"ok": False, "error": error}
         
         # Ensure .R extension
         if not filename.endswith(('.R', '.r')):
-            filename = filename + '.R'
+            filename += '.R'
         
-        file_path = self.workdir / filename
-        if not self.is_safe_path(file_path):
+        filepath = self.workdir / filename
+        
+        if not self.is_safe_path(filepath):
             return {
                 "ok": False,
                 "error": {
@@ -335,25 +347,36 @@ class TidyFlowServer:
                 }
             }
         
-        if file_path.exists() and not overwrite:
+        if filepath.exists() and not overwrite:
             return {
                 "ok": False,
                 "error": {
                     "code": "FILE_EXISTS",
                     "message": f"File {filename} already exists",
-                    "hints": ["Set overwrite=true to replace", "Use a different filename"]
+                    "hints": ["Set overwrite=true to replace the file", "Choose a different filename"]
                 }
             }
         
         try:
+            # Create file with scaffold or empty
             content = R_SCAFFOLD if scaffold else ""
-            file_path.write_text(content)
+            filepath.write_text(content)
             
+            # Update state
+            state = self.load_state()
+            if "files" not in state:
+                state["files"] = []
+            if filename not in state["files"]:
+                state["files"].append(filename)
+            state["updated_at"] = datetime.now().isoformat()
+            self.save_state(state)
+            
+            logger.info(f"Created R file: {filepath}")
             return {
                 "ok": True,
                 "data": {
                     "filename": filename,
-                    "path": str(file_path),
+                    "filepath": str(filepath),
                     "scaffold_used": scaffold
                 }
             }
@@ -366,17 +389,17 @@ class TidyFlowServer:
                 }
             }
     
-    async def handle_rename_r_file(self, old_name: str, new_name: str, overwrite: bool = False) -> Dict[str, Any]:
-        """Rename R file"""
+    async def handle_rename_R_file(self, old_name: str, new_name: str, overwrite: bool = False) -> Dict[str, Any]:
+        """Rename an R script file"""
         ok, error = self.ensure_workdir_set()
         if not ok:
             return {"ok": False, "error": error}
         
         # Ensure .R extension
         if not old_name.endswith(('.R', '.r')):
-            old_name = old_name + '.R'
+            old_name += '.R'
         if not new_name.endswith(('.R', '.r')):
-            new_name = new_name + '.R'
+            new_name += '.R'
         
         old_path = self.workdir / old_name
         new_path = self.workdir / new_name
@@ -386,7 +409,7 @@ class TidyFlowServer:
                 "ok": False,
                 "error": {
                     "code": "UNSAFE_PATH",
-                    "message": "File paths must be within working directory"
+                    "message": "File path is outside working directory"
                 }
             }
         
@@ -405,28 +428,33 @@ class TidyFlowServer:
                 "error": {
                     "code": "FILE_EXISTS",
                     "message": f"File {new_name} already exists",
-                    "hints": ["Set overwrite=true to replace", "Use a different filename"]
+                    "hints": ["Set overwrite=true to replace the file", "Choose a different name"]
                 }
             }
         
         try:
-            if new_path.exists():
+            # Rename the file
+            if new_path.exists() and overwrite:
                 new_path.unlink()
             old_path.rename(new_path)
             
-            # Update primary file if it was renamed
-            if self.primary_file == old_name:
-                self.primary_file = new_name
-                state = self.load_state()
+            # Update state
+            state = self.load_state()
+            if "files" in state and old_name in state["files"]:
+                state["files"].remove(old_name)
+                state["files"].append(new_name)
+            if state.get("primary_file") == old_name:
                 state["primary_file"] = new_name
-                self.save_state(state)
+                self.primary_file = new_name
+            state["updated_at"] = datetime.now().isoformat()
+            self.save_state(state)
             
+            logger.info(f"Renamed {old_name} to {new_name}")
             return {
                 "ok": True,
                 "data": {
                     "old_name": old_name,
-                    "new_name": new_name,
-                    "primary_updated": self.primary_file == new_name
+                    "new_name": new_name
                 }
             }
         except Exception as e:
@@ -439,17 +467,18 @@ class TidyFlowServer:
             }
     
     async def handle_set_primary_file(self, filename: str) -> Dict[str, Any]:
-        """Set primary R file"""
+        """Set the primary R script file"""
         ok, error = self.ensure_workdir_set()
         if not ok:
             return {"ok": False, "error": error}
         
         # Ensure .R extension
         if not filename.endswith(('.R', '.r')):
-            filename = filename + '.R'
+            filename += '.R'
         
-        file_path = self.workdir / filename
-        if not self.is_safe_path(file_path):
+        filepath = self.workdir / filename
+        
+        if not self.is_safe_path(filepath):
             return {
                 "ok": False,
                 "error": {
@@ -458,21 +487,27 @@ class TidyFlowServer:
                 }
             }
         
-        if not file_path.exists():
+        # Check if file exists
+        if not filepath.exists():
             return {
                 "ok": False,
                 "error": {
                     "code": "FILE_NOT_FOUND",
                     "message": f"File {filename} does not exist",
-                    "hints": ["Create the file first using create_r_file"]
+                    "hints": ["Create the file first with create_R_file", "Check the filename is correct"]
                 }
             }
         
+        # Update primary file
         self.primary_file = filename
+        
+        # Save state
         state = self.load_state()
         state["primary_file"] = filename
+        state["updated_at"] = datetime.now().isoformat()
         self.save_state(state)
         
+        logger.info(f"Set primary file to: {filename}")
         return {
             "ok": True,
             "data": {
@@ -480,21 +515,23 @@ class TidyFlowServer:
             }
         }
     
-    async def handle_append_r_code(self, code: str, filename: Optional[str] = None, ensure_trailing_newline: bool = True) -> Dict[str, Any]:
-        """Append code to R file"""
+    async def handle_append_R_code(self, code: str, filename: Optional[str] = None, ensure_trailing_newline: bool = True) -> Dict[str, Any]:
+        """Append R code to an existing script file"""
         ok, error = self.ensure_workdir_set()
         if not ok:
             return {"ok": False, "error": error}
         
-        if filename is None:
+        # Use primary file if not specified
+        if not filename:
             filename = self.primary_file
         
         # Ensure .R extension
         if not filename.endswith(('.R', '.r')):
-            filename = filename + '.R'
+            filename += '.R'
         
-        file_path = self.workdir / filename
-        if not self.is_safe_path(file_path):
+        filepath = self.workdir / filename
+        
+        if not self.is_safe_path(filepath):
             return {
                 "ok": False,
                 "error": {
@@ -503,30 +540,34 @@ class TidyFlowServer:
                 }
             }
         
-        if not file_path.exists():
+        if not filepath.exists():
             return {
                 "ok": False,
                 "error": {
                     "code": "FILE_NOT_FOUND",
                     "message": f"File {filename} does not exist",
-                    "hints": ["Create the file first using create_r_file"]
+                    "hints": ["Create the file first with create_R_file", "Check the filename is correct"]
                 }
             }
         
         try:
-            existing_content = file_path.read_text()
+            # Read existing content
+            existing_content = filepath.read_text()
             
-            # Ensure existing content ends with newline
+            # Prepare code to append
+            code_to_append = code
+            if ensure_trailing_newline and not code.endswith('\n'):
+                code_to_append += '\n'
+            
+            # Ensure existing content ends with newline before appending
             if existing_content and not existing_content.endswith('\n'):
                 existing_content += '\n'
             
-            # Ensure code ends with newline if requested
-            if ensure_trailing_newline and code and not code.endswith('\n'):
-                code += '\n'
+            # Append code
+            new_content = existing_content + code_to_append
+            filepath.write_text(new_content)
             
-            new_content = existing_content + code
-            file_path.write_text(new_content)
-            
+            logger.info(f"Appended {len(code.splitlines())} lines to {filename}")
             return {
                 "ok": True,
                 "data": {
@@ -544,21 +585,23 @@ class TidyFlowServer:
                 }
             }
     
-    async def handle_write_r_code(self, code: str, filename: Optional[str] = None, overwrite: bool = False, use_scaffold_header: bool = True) -> Dict[str, Any]:
-        """Write code to R file"""
+    async def handle_write_R_code(self, code: str, filename: Optional[str] = None, overwrite: bool = False, use_scaffold_header: bool = True) -> Dict[str, Any]:
+        """Write R code to a script file"""
         ok, error = self.ensure_workdir_set()
         if not ok:
             return {"ok": False, "error": error}
         
-        if filename is None:
+        # Use primary file if not specified
+        if not filename:
             filename = self.primary_file
         
         # Ensure .R extension
         if not filename.endswith(('.R', '.r')):
-            filename = filename + '.R'
+            filename += '.R'
         
-        file_path = self.workdir / filename
-        if not self.is_safe_path(file_path):
+        filepath = self.workdir / filename
+        
+        if not self.is_safe_path(filepath):
             return {
                 "ok": False,
                 "error": {
@@ -567,30 +610,44 @@ class TidyFlowServer:
                 }
             }
         
-        if file_path.exists() and not overwrite:
+        if filepath.exists() and not overwrite:
             return {
                 "ok": False,
                 "error": {
                     "code": "FILE_EXISTS",
                     "message": f"File {filename} already exists",
-                    "hints": ["Set overwrite=true to replace", "Use append_r_code to add to existing file"]
+                    "hints": ["Set overwrite=true to replace the file", "Use append_R_code to add to existing file"]
                 }
             }
         
         try:
-            # Apply scaffold if requested and code doesn't already have structure
-            if use_scaffold_header and not code.strip().startswith('#'):
+            # Prepare content
+            if use_scaffold_header and R_SCAFFOLD:
                 content = R_SCAFFOLD + code
             else:
                 content = code
             
-            file_path.write_text(content)
+            # Ensure trailing newline
+            if content and not content.endswith('\n'):
+                content += '\n'
             
+            # Write file
+            filepath.write_text(content)
+            
+            # Update state
+            state = self.load_state()
+            if "files" not in state:
+                state["files"] = []
+            if filename not in state["files"]:
+                state["files"].append(filename)
+            state["updated_at"] = datetime.now().isoformat()
+            self.save_state(state)
+            
+            logger.info(f"Wrote {len(content.splitlines())} lines to {filename}")
             return {
                 "ok": True,
                 "data": {
                     "filename": filename,
-                    "path": str(file_path),
                     "lines_written": len(content.splitlines()),
                     "scaffold_used": use_scaffold_header
                 }
@@ -604,21 +661,24 @@ class TidyFlowServer:
                 }
             }
     
-    async def handle_run_r_script(self, filename: Optional[str] = None, args: Optional[List[str]] = None, timeout_sec: int = 120, save_rdata: bool = True) -> Dict[str, Any]:
-        """Run R script"""
+    async def handle_run_R_script(self, filename: Optional[str] = None, args: Optional[List[str]] = None, 
+                                  timeout_sec: int = 120, save_rdata: bool = True) -> Dict[str, Any]:
+        """Execute an R script file"""
         ok, error = self.ensure_workdir_set()
         if not ok:
             return {"ok": False, "error": error}
         
-        if filename is None:
+        # Use primary file if not specified
+        if not filename:
             filename = self.primary_file
         
         # Ensure .R extension
         if not filename.endswith(('.R', '.r')):
-            filename = filename + '.R'
+            filename += '.R'
         
-        file_path = self.workdir / filename
-        if not self.is_safe_path(file_path):
+        filepath = self.workdir / filename
+        
+        if not self.is_safe_path(filepath):
             return {
                 "ok": False,
                 "error": {
@@ -627,75 +687,70 @@ class TidyFlowServer:
                 }
             }
         
-        if not file_path.exists():
+        if not filepath.exists():
             return {
                 "ok": False,
                 "error": {
                     "code": "FILE_NOT_FOUND",
-                    "message": f"File {filename} does not exist",
-                    "hints": ["Create and write code to the file first"]
+                    "message": f"Script file {filename} does not exist",
+                    "hints": ["Create and write the script first", "Check the filename is correct"]
                 }
             }
         
-        # Build command
+        # Build command args
         cmd_args = []
+        
+        # Add save workspace option
         if save_rdata:
             cmd_args.extend(["--save"])
-        cmd_args.append(str(file_path))
+        else:
+            cmd_args.extend(["--no-save"])
+        
+        # Add the script file
+        cmd_args.append(str(filepath))
+        
+        # Add any additional arguments
         if args:
             cmd_args.extend(args)
         
-        result = self.run_r_command(cmd_args, timeout_sec)
+        # Execute the script
+        result = self.run_r_command(cmd_args, timeout=timeout_sec)
         
-        if result.get("ok"):
-            return {
-                "ok": True,
-                "data": {
-                    "filename": filename,
-                    "stdout": result.get("stdout", ""),
-                    "stderr": result.get("stderr", ""),
-                    "elapsed_seconds": result.get("elapsed_seconds", 0),
-                    "rdata_saved": save_rdata
-                }
-            }
+        if result["ok"]:
+            logger.info(f"Successfully executed {filename}")
+            result["data"]["filename"] = filename
+            result["data"]["save_rdata"] = save_rdata
         else:
-            error_info = result.get("error", {})
-            error_info["filename"] = filename
-            error_info["stderr"] = result.get("stderr", "")
-            return {"ok": False, "error": error_info}
+            logger.error(f"Failed to execute {filename}: {result['error']['message']}")
+        
+        return result
     
-    async def handle_run_r_expression(self, expr: str, timeout_sec: int = 60) -> Dict[str, Any]:
-        """Run single R expression"""
+    async def handle_run_R_expression(self, expr: str, timeout_sec: int = 60) -> Dict[str, Any]:
+        """Execute a single R expression"""
         ok, error = self.ensure_workdir_set()
         if not ok:
             return {"ok": False, "error": error}
         
-        # Use -e flag for expression evaluation
-        result = self.run_r_command(["-e", expr], timeout_sec)
+        # Execute the expression using -e flag
+        result = self.run_r_command(["-e", expr, "--slave"], timeout=timeout_sec)
         
-        if result.get("ok"):
-            return {
-                "ok": True,
-                "data": {
-                    "expression": expr,
-                    "stdout": result.get("stdout", ""),
-                    "stderr": result.get("stderr", ""),
-                    "elapsed_seconds": result.get("elapsed_seconds", 0)
-                }
-            }
+        if result["ok"]:
+            logger.info(f"Successfully executed expression: {expr[:50]}...")
+            result["data"]["expression"] = expr
         else:
-            error_info = result.get("error", {})
-            error_info["expression"] = expr
-            error_info["stderr"] = result.get("stderr", "")
-            return {"ok": False, "error": error_info}
+            logger.error(f"Failed to execute expression: {result['error']['message']}")
+        
+        return result
     
-    async def handle_list_exports(self, glob: str = "*", sort_by: str = "mtime", descending: bool = True, limit: int = 200) -> Dict[str, Any]:
-        """List files in working directory"""
+    async def handle_list_exports(self, glob: str = "*", sort_by: str = "mtime", 
+                                  descending: bool = True, limit: int = 200) -> Dict[str, Any]:
+        """List files in the working directory"""
         ok, error = self.ensure_workdir_set()
         if not ok:
             return {"ok": False, "error": error}
         
         try:
+            # Get matching files
             files = []
             for item in self.workdir.glob(glob):
                 if item.is_file():
@@ -704,6 +759,7 @@ class TidyFlowServer:
                         "name": item.name,
                         "size": stat.st_size,
                         "mtime": stat.st_mtime,
+                        "mtime_str": datetime.fromtimestamp(stat.st_mtime).isoformat(),
                         "extension": item.suffix
                     })
             
@@ -713,14 +769,10 @@ class TidyFlowServer:
             elif sort_by == "size":
                 files.sort(key=lambda x: x["size"], reverse=descending)
             elif sort_by == "name":
-                files.sort(key=lambda x: x["name"], reverse=descending)
+                files.sort(key=lambda x: x["name"], reverse=not descending)
             
-            # Apply limit
+            # Limit results
             files = files[:limit]
-            
-            # Format times
-            for f in files:
-                f["mtime_str"] = datetime.fromtimestamp(f["mtime"]).isoformat()
             
             return {
                 "ok": True,
@@ -739,14 +791,16 @@ class TidyFlowServer:
                 }
             }
     
-    async def handle_read_export(self, name: str, max_bytes: int = 50000, as_text: bool = True, encoding: str = "utf-8") -> Dict[str, Any]:
-        """Read file from working directory"""
+    async def handle_read_export(self, name: str, max_bytes: int = 50000, 
+                                 as_text: bool = True, encoding: str = "utf-8") -> Dict[str, Any]:
+        """Read a file from the working directory"""
         ok, error = self.ensure_workdir_set()
         if not ok:
             return {"ok": False, "error": error}
         
-        file_path = self.workdir / name
-        if not self.is_safe_path(file_path):
+        filepath = self.workdir / name
+        
+        if not self.is_safe_path(filepath):
             return {
                 "ok": False,
                 "error": {
@@ -755,7 +809,7 @@ class TidyFlowServer:
                 }
             }
         
-        if not file_path.exists():
+        if not filepath.exists():
             return {
                 "ok": False,
                 "error": {
@@ -764,40 +818,60 @@ class TidyFlowServer:
                 }
             }
         
+        if not filepath.is_file():
+            return {
+                "ok": False,
+                "error": {
+                    "code": "NOT_A_FILE",
+                    "message": f"{name} is not a file"
+                }
+            }
+        
         try:
-            file_size = file_path.stat().st_size
+            file_size = filepath.stat().st_size
+            
+            if file_size > max_bytes:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "FILE_TOO_LARGE",
+                        "message": f"File size ({file_size} bytes) exceeds maximum ({max_bytes} bytes)",
+                        "hints": [f"Increase max_bytes parameter (current: {max_bytes})", "Use preview_table for CSV files"]
+                    }
+                }
             
             if as_text:
-                # Read as text with size limit
-                with open(file_path, 'r', encoding=encoding) as f:
-                    content = f.read(max_bytes)
-                truncated = file_size > max_bytes
-                
+                content = filepath.read_text(encoding=encoding)
                 return {
                     "ok": True,
                     "data": {
-                        "name": name,
                         "content": content,
+                        "filename": name,
                         "size": file_size,
-                        "truncated": truncated,
-                        "encoding": encoding
+                        "lines": len(content.splitlines())
                     }
                 }
             else:
-                # Read as binary and encode to base64
-                with open(file_path, 'rb') as f:
-                    content = f.read(max_bytes)
-                truncated = file_size > max_bytes
-                
+                content = filepath.read_bytes()
+                # Encode as base64 for transport
+                content_b64 = base64.b64encode(content).decode('ascii')
                 return {
                     "ok": True,
                     "data": {
-                        "name": name,
-                        "content_base64": base64.b64encode(content).decode('ascii'),
-                        "size": file_size,
-                        "truncated": truncated
+                        "content_base64": content_b64,
+                        "filename": name,
+                        "size": file_size
                     }
                 }
+        except UnicodeDecodeError as e:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "DECODE_ERROR",
+                    "message": f"Failed to decode file as {encoding}: {str(e)}",
+                    "hints": ["Try as_text=false for binary files", f"Try a different encoding (current: {encoding})"]
+                }
+            }
         except Exception as e:
             return {
                 "ok": False,
@@ -808,13 +882,14 @@ class TidyFlowServer:
             }
     
     async def handle_preview_table(self, name: str, delimiter: str = ",", max_rows: int = 50) -> Dict[str, Any]:
-        """Preview CSV/TSV file as table"""
+        """Preview a CSV/TSV file as a table"""
         ok, error = self.ensure_workdir_set()
         if not ok:
             return {"ok": False, "error": error}
         
-        file_path = self.workdir / name
-        if not self.is_safe_path(file_path):
+        filepath = self.workdir / name
+        
+        if not self.is_safe_path(filepath):
             return {
                 "ok": False,
                 "error": {
@@ -823,7 +898,7 @@ class TidyFlowServer:
                 }
             }
         
-        if not file_path.exists():
+        if not filepath.exists():
             return {
                 "ok": False,
                 "error": {
@@ -834,38 +909,48 @@ class TidyFlowServer:
         
         try:
             rows = []
-            headers = None
+            total_rows = 0
             
-            with open(file_path, 'r', newline='', encoding='utf-8') as f:
-                reader = csv.reader(f, delimiter=delimiter)
+            # Auto-detect delimiter if tab is specified
+            if delimiter == "\\t" or delimiter == "tab":
+                delimiter = "\t"
+            
+            with open(filepath, 'r', newline='', encoding='utf-8') as csvfile:
+                # Try to detect the delimiter if not sure
+                if delimiter == "auto":
+                    sample = csvfile.read(1024)
+                    csvfile.seek(0)
+                    sniffer = csv.Sniffer()
+                    delimiter = sniffer.sniff(sample).delimiter
+                
+                reader = csv.reader(csvfile, delimiter=delimiter)
                 
                 # Read header
-                try:
-                    headers = next(reader)
-                except StopIteration:
+                header = next(reader, None)
+                if not header:
                     return {
                         "ok": False,
                         "error": {
                             "code": "EMPTY_FILE",
-                            "message": "File is empty"
+                            "message": "CSV file is empty"
                         }
                     }
                 
                 # Read data rows
-                for i, row in enumerate(reader):
-                    if i >= max_rows:
-                        break
-                    rows.append(row)
+                for row in reader:
+                    total_rows += 1
+                    if len(rows) < max_rows:
+                        rows.append(row)
             
             return {
                 "ok": True,
                 "data": {
-                    "name": name,
-                    "headers": headers,
+                    "header": header,
                     "rows": rows,
-                    "row_count": len(rows),
-                    "column_count": len(headers) if headers else 0,
-                    "truncated": len(rows) == max_rows
+                    "total_rows": total_rows,
+                    "displayed_rows": len(rows),
+                    "delimiter": delimiter,
+                    "truncated": total_rows > max_rows
                 }
             }
         except Exception as e:
@@ -873,146 +958,183 @@ class TidyFlowServer:
                 "ok": False,
                 "error": {
                     "code": "PREVIEW_ERROR",
-                    "message": f"Failed to preview table: {str(e)}"
+                    "message": f"Failed to preview table: {str(e)}",
+                    "hints": ["Check the file format", f"Try a different delimiter (current: {delimiter})"]
                 }
             }
     
     async def handle_ggplot_style_check(self, code: str) -> Dict[str, Any]:
-        """Analyze and optimize ggplot code"""
+        """Analyze and optimize ggplot code for publication-quality styling"""
         try:
-            optimized, changes = self.optimize_ggplot_code(code)
+            optimizations = []
+            optimized_code = code
             
-            # Detect potential issues
-            issues = []
-            suggestions = []
+            # Check for assignment operator
+            if "<-" in code:
+                optimizations.append("Replace '<-' with '=' for consistency")
+                optimized_code = optimized_code.replace("<-", "=")
             
             # Check for theme
-            if 'theme_' not in code:
-                issues.append("No theme specified")
-                suggestions.append("Add theme_minimal(base_size=14) for clean, readable plots")
+            if "theme_gray()" in code or "theme_grey()" in code:
+                optimizations.append("Replace theme_gray() with theme_minimal(base_size=14)")
+                optimized_code = optimized_code.replace("theme_gray()", "theme_minimal(base_size=14)")
+                optimized_code = optimized_code.replace("theme_grey()", "theme_minimal(base_size=14)")
+            elif "theme(" not in code and "ggplot(" in code:
+                optimizations.append("Add theme_minimal(base_size=14) for better aesthetics")
             
-            # Check for color palette
-            if 'ggplot(' in code and 'scale_' not in code:
-                issues.append("No explicit color scale")
-                suggestions.append("Add scale_color_brewer(palette='Set2') for categorical or scale_color_viridis() for continuous")
+            # Check for ggsave
+            if "ggsave(" in code:
+                if "dpi=" not in code:
+                    optimizations.append("Add dpi=800 to ggsave() for publication quality")
+                if "width=" not in code or "height=" not in code:
+                    optimizations.append("Specify width=5, height=4 in ggsave() for optimal dimensions")
+            elif "ggplot(" in code:
+                optimizations.append("Add ggsave() with width=5, height=4, dpi=800")
             
-            # Check for labels
-            if 'labs(' not in code and 'xlab(' not in code and 'ylab(' not in code:
-                issues.append("No axis labels specified")
-                suggestions.append("Add descriptive labels with labs(x='...', y='...', title='...')")
+            # Check for color scales
+            if "ggplot(" in code and "color=" in code and "scale_color" not in code and "scale_colour" not in code:
+                optimizations.append("Add scale_color_brewer(palette='Set2') for better categorical colors")
             
-            # Check for save
-            if 'ggsave(' not in code:
-                suggestions.append("Remember to save with ggsave('filename.png', width=5, height=4, dpi=800)")
+            # Check for continuous color scales
+            if "ggplot(" in code and "fill=" in code and "scale_fill" not in code:
+                if "continuous" in code.lower() or "numeric" in code.lower():
+                    optimizations.append("Consider scale_fill_viridis_c() for continuous data")
+                else:
+                    optimizations.append("Add scale_fill_brewer(palette='Set2') for categorical data")
+            
+            # Check for point size
+            if "geom_point(" in code and "size=" not in code:
+                optimizations.append("Set size=2.5 in geom_point() for better visibility")
+            
+            # Check for line width
+            if "geom_line(" in code:
+                if "linewidth=" not in code and "size=" not in code:
+                    optimizations.append("Set linewidth=0.8 in geom_line() for better visibility")
+            
+            # Provide style guide reference
+            style_notes = [
+                "Following publication-ready ggplot2 best practices:",
+                "- Muted color palettes (Set2, viridis)",
+                "- Clear typography (base_size ≥ 14pt)",
+                "- Optimal export dimensions (5x4 inches)",
+                "- High resolution (dpi=800)"
+            ]
             
             return {
                 "ok": True,
                 "data": {
                     "original_code": code,
-                    "optimized_code": optimized,
-                    "changes_made": changes,
-                    "issues_detected": issues,
-                    "suggestions": suggestions,
-                    "style_guide": GGPLOT_STYLE_GUIDE if len(issues) > 0 else None
+                    "optimized_code": optimized_code if optimizations else code,
+                    "optimizations": optimizations,
+                    "style_notes": style_notes,
+                    "improvements_found": len(optimizations)
                 }
             }
         except Exception as e:
             return {
                 "ok": False,
                 "error": {
-                    "code": "STYLE_CHECK_ERROR",
+                    "code": "ANALYSIS_ERROR",
                     "message": f"Failed to analyze code: {str(e)}"
                 }
             }
     
-    async def handle_inspect_r_objects(self, objects: Optional[List[str]] = None, str_max_level: int = 1, timeout_sec: int = 60) -> Dict[str, Any]:
-        """Inspect R objects from saved session"""
+    async def handle_inspect_R_objects(self, objects: Optional[List[str]] = None, 
+                                       str_max_level: int = 1, timeout_sec: int = 60) -> Dict[str, Any]:
+        """Inspect R objects from the last saved session"""
         ok, error = self.ensure_workdir_set()
         if not ok:
             return {"ok": False, "error": error}
         
         # Check if .RData exists
-        rdata_path = self.workdir / ".RData"
-        if not rdata_path.exists():
+        rdata_file = self.workdir / ".RData"
+        if not rdata_file.exists():
             return {
                 "ok": False,
                 "error": {
                     "code": "NO_RDATA",
-                    "message": "No .RData file found. Run a script with save_rdata=true first.",
-                    "hints": ["Run an R script with save_rdata=true", "Create objects in R and save the workspace"]
+                    "message": "No .RData file found in working directory",
+                    "hints": ["Run an R script with save_rdata=true first", "Check if R session was saved"]
                 }
             }
         
-        # Build R expression to inspect objects
+        # Build R code to inspect objects
+        r_code = f"""
+        # Load saved workspace
+        load(".RData")
+        
+        # Get all objects if none specified
+        all_objects <- ls()
+        """
+        
         if objects:
             # Inspect specific objects
-            inspect_code = f"""
-load('.RData')
-objects_to_inspect <- c({', '.join([f'"{obj}"' for obj in objects])})
-results <- list()
-for(obj_name in objects_to_inspect) {{
-    if(exists(obj_name)) {{
-        obj <- get(obj_name)
-        results[[obj_name]] <- list(
-            class = class(obj),
-            typeof = typeof(obj),
-            length = length(obj),
-            dim = dim(obj),
-            names = names(obj),
-            str = capture.output(str(obj, max.level={str_max_level}))
-        )
-    }} else {{
-        results[[obj_name]] <- "Object not found"
-    }}
-}}
-print(results)
-"""
+            r_code += f"""
+            requested_objects <- c({', '.join([f'"{obj}"' for obj in objects])})
+            missing <- setdiff(requested_objects, all_objects)
+            if (length(missing) > 0) {{
+                cat("Warning: Objects not found:", paste(missing, collapse=", "), "\\n")
+            }}
+            objects_to_inspect <- intersect(requested_objects, all_objects)
+            """
         else:
-            # List all objects
-            inspect_code = f"""
-load('.RData')
-obj_list <- ls()
-if(length(obj_list) > 0) {{
-    results <- list()
-    for(obj_name in obj_list) {{
-        obj <- get(obj_name)
-        results[[obj_name]] <- list(
-            class = class(obj),
-            typeof = typeof(obj),
-            length = length(obj),
-            dim = dim(obj)
-        )
-    }}
-    print(results)
-}} else {{
-    print("No objects in workspace")
-}}
-"""
+            r_code += """
+            objects_to_inspect <- all_objects
+            """
         
-        result = self.run_r_command(["-e", inspect_code], timeout_sec)
+        r_code += f"""
+        # Inspect each object
+        for (obj_name in objects_to_inspect) {{
+            cat("\\n=== Object:", obj_name, "===\\n")
+            obj <- get(obj_name)
+            
+            # Basic info
+            cat("Class:", paste(class(obj), collapse=", "), "\\n")
+            cat("Type:", typeof(obj), "\\n")
+            
+            # Size info
+            if (is.data.frame(obj) || is.matrix(obj)) {{
+                cat("Dimensions:", nrow(obj), "x", ncol(obj), "\\n")
+            }} else if (is.list(obj)) {{
+                cat("Length:", length(obj), "\\n")
+            }} else if (is.vector(obj)) {{
+                cat("Length:", length(obj), "\\n")
+            }}
+            
+            # Structure
+            cat("\\nStructure:\\n")
+            str(obj, max.level={str_max_level})
+            
+            # Summary for data frames
+            if (is.data.frame(obj)) {{
+                cat("\\nSummary:\\n")
+                print(summary(obj))
+            }}
+            
+            # First few elements for vectors
+            if (is.vector(obj) && !is.list(obj) && length(obj) > 0) {{
+                cat("\\nFirst elements:\\n")
+                print(head(obj, 10))
+            }}
+        }}
+        """
         
-        if result.get("ok"):
-            return {
-                "ok": True,
-                "data": {
-                    "stdout": result.get("stdout", ""),
-                    "stderr": result.get("stderr", ""),
-                    "objects_requested": objects,
-                    "elapsed_seconds": result.get("elapsed_seconds", 0)
-                }
-            }
-        else:
-            error_info = result.get("error", {})
-            error_info["stderr"] = result.get("stderr", "")
-            return {"ok": False, "error": error_info}
+        # Execute the inspection code
+        result = self.run_r_command(["-e", r_code, "--slave"], timeout=timeout_sec)
+        
+        if result["ok"]:
+            logger.info(f"Inspected {len(objects) if objects else 'all'} objects")
+            result["data"]["objects_inspected"] = objects if objects else "all"
+        
+        return result
     
-    async def handle_which_r(self) -> Dict[str, Any]:
-        """Find R executable"""
-        rscript = shutil.which("Rscript")
-        
+    async def handle_which_R(self) -> Dict[str, Any]:
+        """Find R executable in PATH"""
         executable = None
         alternatives = []
         
+        # Check for Rscript first (preferred)
+        rscript = shutil.which("Rscript")
         if rscript:
             executable = rscript
             alternatives.append(rscript)
@@ -1041,7 +1163,7 @@ if(length(obj_list) > 0) {{
                 }
             }
     
-    async def handle_list_r_files(self) -> Dict[str, Any]:
+    async def handle_list_R_files(self) -> Dict[str, Any]:
         """List all R files in working directory"""
         ok, error = self.ensure_workdir_set()
         if not ok:
@@ -1075,11 +1197,13 @@ if(length(obj_list) > 0) {{
 
 async def main():
     """Main entry point"""
-    logger.info("Starting TidyFlow MCP server...")
+    # Print ASCII banner
+    print_ascii_banner()
+    logger.info("Starting PilotR MCP server...")
     
     # Create server instance
-    server = Server("TidyFlow")
-    TidyFlow = TidyFlowServer()
+    server = Server("PilotR")
+    pilotr = PilotRServer()
     
     # Register list_tools handler
     @server.list_tools()
@@ -1088,21 +1212,21 @@ async def main():
         return [
             Tool(name="set_workdir", description="Set the working directory for all R operations", 
                  inputSchema={"type": "object", "properties": {"path": {"type": "string"}, "create": {"type": "boolean", "default": True}}, "required": ["path"]}),
-            Tool(name="get_state", description="Get current TidyFlow state and configuration", 
+            Tool(name="get_state", description="Get current PilotR state and configuration", 
                  inputSchema={"type": "object", "properties": {}}),
-            Tool(name="create_r_file", description="Create a new R script file", 
+            Tool(name="create_R_file", description="Create a new R script file", 
                  inputSchema={"type": "object", "properties": {"filename": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}, "scaffold": {"type": "boolean", "default": True}}, "required": ["filename"]}),
-            Tool(name="rename_r_file", description="Rename an R script file", 
+            Tool(name="rename_R_file", description="Rename an R script file", 
                  inputSchema={"type": "object", "properties": {"old_name": {"type": "string"}, "new_name": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}, "required": ["old_name", "new_name"]}),
             Tool(name="set_primary_file", description="Set the primary R script file", 
                  inputSchema={"type": "object", "properties": {"filename": {"type": "string"}}, "required": ["filename"]}),
-            Tool(name="append_r_code", description="Append R code to an existing script file", 
+            Tool(name="append_R_code", description="Append R code to an existing script file", 
                  inputSchema={"type": "object", "properties": {"code": {"type": "string"}, "filename": {"type": "string"}, "ensure_trailing_newline": {"type": "boolean", "default": True}}, "required": ["code"]}),
-            Tool(name="write_r_code", description="Write R code to a script file", 
+            Tool(name="write_R_code", description="Write R code to a script file", 
                  inputSchema={"type": "object", "properties": {"code": {"type": "string"}, "filename": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}, "use_scaffold_header": {"type": "boolean", "default": True}}, "required": ["code"]}),
-            Tool(name="run_r_script", description="Execute an R script file", 
+            Tool(name="run_R_script", description="Execute an R script file", 
                  inputSchema={"type": "object", "properties": {"filename": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "timeout_sec": {"type": "integer", "default": 120}, "save_rdata": {"type": "boolean", "default": True}}}),
-            Tool(name="run_r_expression", description="Execute a single R expression", 
+            Tool(name="run_R_expression", description="Execute a single R expression", 
                  inputSchema={"type": "object", "properties": {"expr": {"type": "string"}, "timeout_sec": {"type": "integer", "default": 60}}, "required": ["expr"]}),
             Tool(name="list_exports", description="List files in the working directory", 
                  inputSchema={"type": "object", "properties": {"glob": {"type": "string", "default": "*"}, "sort_by": {"type": "string", "default": "mtime"}, "descending": {"type": "boolean", "default": True}, "limit": {"type": "integer", "default": 200}}}),
@@ -1112,11 +1236,11 @@ async def main():
                  inputSchema={"type": "object", "properties": {"name": {"type": "string"}, "delimiter": {"type": "string", "default": ","}, "max_rows": {"type": "integer", "default": 50}}, "required": ["name"]}),
             Tool(name="ggplot_style_check", description="Analyze and optimize ggplot code for publication-quality styling", 
                  inputSchema={"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}),
-            Tool(name="inspect_r_objects", description="Inspect R objects from the last saved session", 
+            Tool(name="inspect_R_objects", description="Inspect R objects from the last saved session", 
                  inputSchema={"type": "object", "properties": {"objects": {"type": "array", "items": {"type": "string"}}, "str_max_level": {"type": "integer", "default": 1}, "timeout_sec": {"type": "integer", "default": 60}}}),
-            Tool(name="which_r", description="Find R executable in PATH", 
+            Tool(name="which_R", description="Find R executable in PATH", 
                  inputSchema={"type": "object", "properties": {}}),
-            Tool(name="list_r_files", description="List all R script files in the working directory", 
+            Tool(name="list_R_files", description="List all R script files in the working directory", 
                  inputSchema={"type": "object", "properties": {}})
         ]
     
@@ -1126,37 +1250,37 @@ async def main():
         logger.debug(f"Calling tool: {name} with arguments: {arguments}")
         try:
             if name == "set_workdir":
-                result = await TidyFlow.handle_set_workdir(**arguments)
+                result = await pilotr.handle_set_workdir(**arguments)
             elif name == "get_state":
-                result = await TidyFlow.handle_get_state()
-            elif name == "create_r_file":
-                result = await TidyFlow.handle_create_r_file(**arguments)
-            elif name == "rename_r_file":
-                result = await TidyFlow.handle_rename_r_file(**arguments)
+                result = await pilotr.handle_get_state()
+            elif name == "create_R_file":
+                result = await pilotr.handle_create_R_file(**arguments)
+            elif name == "rename_R_file":
+                result = await pilotr.handle_rename_R_file(**arguments)
             elif name == "set_primary_file":
-                result = await TidyFlow.handle_set_primary_file(**arguments)
-            elif name == "append_r_code":
-                result = await TidyFlow.handle_append_r_code(**arguments)
-            elif name == "write_r_code":
-                result = await TidyFlow.handle_write_r_code(**arguments)
-            elif name == "run_r_script":
-                result = await TidyFlow.handle_run_r_script(**arguments)
-            elif name == "run_r_expression":
-                result = await TidyFlow.handle_run_r_expression(**arguments)
+                result = await pilotr.handle_set_primary_file(**arguments)
+            elif name == "append_R_code":
+                result = await pilotr.handle_append_R_code(**arguments)
+            elif name == "write_R_code":
+                result = await pilotr.handle_write_R_code(**arguments)
+            elif name == "run_R_script":
+                result = await pilotr.handle_run_R_script(**arguments)
+            elif name == "run_R_expression":
+                result = await pilotr.handle_run_R_expression(**arguments)
             elif name == "list_exports":
-                result = await TidyFlow.handle_list_exports(**arguments)
+                result = await pilotr.handle_list_exports(**arguments)
             elif name == "read_export":
-                result = await TidyFlow.handle_read_export(**arguments)
+                result = await pilotr.handle_read_export(**arguments)
             elif name == "preview_table":
-                result = await TidyFlow.handle_preview_table(**arguments)
+                result = await pilotr.handle_preview_table(**arguments)
             elif name == "ggplot_style_check":
-                result = await TidyFlow.handle_ggplot_style_check(**arguments)
-            elif name == "inspect_r_objects":
-                result = await TidyFlow.handle_inspect_r_objects(**arguments)
-            elif name == "which_r":
-                result = await TidyFlow.handle_which_r()
-            elif name == "list_r_files":
-                result = await TidyFlow.handle_list_r_files()
+                result = await pilotr.handle_ggplot_style_check(**arguments)
+            elif name == "inspect_R_objects":
+                result = await pilotr.handle_inspect_R_objects(**arguments)
+            elif name == "which_R":
+                result = await pilotr.handle_which_R()
+            elif name == "list_R_files":
+                result = await pilotr.handle_list_R_files()
             else:
                 result = {"ok": False, "error": {"code": "UNKNOWN_TOOL", "message": f"Unknown tool: {name}"}}
             
