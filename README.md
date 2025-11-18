@@ -21,6 +21,11 @@ Empower R programming with Model Context Protocol.
 
 ## Installation (No Dependencies Needed)
 
+### Step 0: Download and Set Up Claude Desktop and R
+
+1. Download [Claude Desktop](https://www.claude.com/download) and set up your Claude account. Free-tier accounts are sufficient to get started with PilotR, but the Pro accounts are recommended for more complicated tasks.
+2. Download and install [R](https://mirror.las.iastate.edu/CRAN/) runtime, install it and make sure that it is within the system path.
+
 ### Step 1: Download `PilotR.mcpb`
 
 Simply download the latest **`PilotR.mcpb`** file from this repository or release page.
@@ -30,7 +35,7 @@ Simply download the latest **`PilotR.mcpb`** file from this repository or releas
 1. Locate the downloaded `PilotR.mcpb` file  
 2. Double-click the file  
 3. Claude Desktop will open and prompt to install  
-4. Follow the on-screen instructions  
+4. Follow the on-screen instructions. (A Python runtime might need to be installed at this step. Please just follow the prompts to proceed with the installation.)  
 
 ## Configuration (Optional)
 
